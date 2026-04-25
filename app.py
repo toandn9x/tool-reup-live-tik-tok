@@ -166,6 +166,11 @@ class App(ctk.CTk):
         # Handle multi-line or comma separated
         tiktok_urls = [u.strip() for u in tiktok_urls_raw.replace('\n', ',').split(',') if u.strip()]
 
+        # CLEANUP: Stop existing restreamer before creating a new one
+        if self.restreamer:
+            self.log("Stopping previous instance...")
+            self.restreamer.stop()
+
         self.restreamer = TikTokRestreamer(
             tiktok_urls, rtmp_url, stream_key, 
             cookie_file if cookie_file else None,

@@ -22,6 +22,7 @@ class TikTokRestreamer:
         self.is_running = False
         self.stop_event = threading.Event()
         self.current_target = None
+        self.preview_processes = [] # Track preview processes
 
     def get_stream_url(self, url):
         """Extracts the direct stream URL from a specific TikTok URL with best quality."""
@@ -157,6 +158,14 @@ class TikTokRestreamer:
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.is_running = False
+        
+        # Also kill all preview processes
+        for proc in self.preview_processes:
+            try:
+                proc.terminate()
+            except:
+                pass
+        self.preview_processes = []
 
     def _parse_cookies_for_ffmpeg(self):
         """Parses Netscape cookies.txt and returns a string for FFmpeg headers."""
@@ -181,6 +190,9 @@ class TikTokRestreamer:
     def preview(self, url, log_callback):
         """Opens a preview window using robust binary piping."""
         try:
+            # Clean up dead preview processes first
+            self.preview_processes = [p for p in self.preview_processes if p.poll() is None]
+            
             log_callback(f"Starting robust piped preview for {url}...")
             
             # 1. Command for yt-dlp to output raw data to stdout
@@ -209,16 +221,22 @@ class TikTokRestreamer:
                 filter_str = f"drawtext=text='{self.overlay_text}':fontfile='{font_path}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=h-80"
                 ffplay_cmd.extend(['-vf', filter_str])
 
-            # Start yt-dlp and redirect stderr to null to avoid polluting stdout
+            # Start yt-dlp
             ytdlp_proc = subprocess.Popen(
                 ytdlp_cmd, 
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.DEVNULL,
-                bufsize=10**6 # Large buffer for smooth streaming
+                bufsize=10**6
             )
             
             # Start ffplay reading from yt-dlp's stdout
-            subprocess.Popen(ffplay_cmd, stdin=ytdlp_proc.stdout)
+            ffplay_proc = subprocess.Popen(ffplay_cmd, stdin=ytdlp_proc.stdout)
+            
+            # Crucial: Close the stdout in the parent process so it's only owned by ffplay
+            ytdlp_proc.stdout.close()
+            
+            self.preview_processes.append(ytdlp_proc)
+            self.preview_processes.append(ffplay_proc)
             
             log_callback("Piped preview started. If the shop is LIVE, the window will appear shortly.")
         except Exception as e:
