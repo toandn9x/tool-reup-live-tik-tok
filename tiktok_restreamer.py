@@ -158,25 +158,50 @@ class TikTokRestreamer:
                 self.process.kill()
         self.is_running = False
 
-    def preview(self, url, log_callback):
-        """Opens a preview window using piping for maximum reliability."""
+    def _parse_cookies_for_ffmpeg(self):
+        """Parses Netscape cookies.txt and returns a string for FFmpeg headers."""
+        if not self.cookie_path or not os.path.exists(self.cookie_path):
+            return ""
+        
+        cookies = []
         try:
-            # Use Piping: yt-dlp downloads the data and pipes it to ffplay
-            # Adding --quiet and --no-warnings to ensure ONLY video data goes to stdout
-            ytdlp_cmd = ['yt-dlp', '--quiet', '--no-warnings', '-f', 'best', '-o', '-', url]
+            with open(self.cookie_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith('#') or not line.strip():
+                        continue
+                    parts = line.strip().split('\t')
+                    if len(parts) >= 7:
+                        name = parts[5]
+                        value = parts[6]
+                        cookies.append(f"{name}={value}")
+            return "; ".join(cookies)
+        except Exception:
+            return ""
+
+    def preview(self, url, log_callback):
+        """Opens a preview window using robust binary piping."""
+        try:
+            log_callback(f"Starting robust piped preview for {url}...")
+            
+            # 1. Command for yt-dlp to output raw data to stdout
+            ytdlp_cmd = [
+                'yt-dlp', 
+                '--quiet', '--no-warnings', 
+                '-f', 'best', 
+                '-o', '-', 
+                url
+            ]
             if self.cookie_path and os.path.exists(self.cookie_path):
                 ytdlp_cmd.extend(['--cookies', self.cookie_path])
-            ytdlp_cmd.extend(['--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'])
             
+            # 2. Command for ffplay to read from stdin (pipe:0)
             ffplay_cmd = [
                 'ffplay', 
                 '-i', 'pipe:0', 
                 '-alwaysontop', 
                 '-window_title', f"Preview - {url}",
-                '-x', '400',
-                '-y', '711',
-                '-loglevel', 'error',
-                '-autoexit'
+                '-x', '400', '-y', '711', 
+                '-loglevel', 'error'
             ]
             
             if self.overlay_text:
@@ -184,15 +209,17 @@ class TikTokRestreamer:
                 filter_str = f"drawtext=text='{self.overlay_text}':fontfile='{font_path}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.6:boxborderw=10:x=(w-text_w)/2:y=h-80"
                 ffplay_cmd.extend(['-vf', filter_str])
 
-            log_callback(f"Starting piped preview for {url}...")
+            # Start yt-dlp and redirect stderr to null to avoid polluting stdout
+            ytdlp_proc = subprocess.Popen(
+                ytdlp_cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.DEVNULL,
+                bufsize=10**6 # Large buffer for smooth streaming
+            )
             
-            # Start both processes and pipe them together
-            ytdlp_proc = subprocess.Popen(ytdlp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            ffplay_proc = subprocess.Popen(ffplay_cmd, stdin=ytdlp_proc.stdout)
+            # Start ffplay reading from yt-dlp's stdout
+            subprocess.Popen(ffplay_cmd, stdin=ytdlp_proc.stdout)
             
-            # Close the stdout in our main process so ytdlp gets a SIGPIPE if ffplay closes
-            ytdlp_proc.stdout.close() 
-            
-            log_callback("Piped preview started. The window should appear in a few seconds.")
+            log_callback("Piped preview started. If the shop is LIVE, the window will appear shortly.")
         except Exception as e:
             log_callback(f"Preview Error: {str(e)}")
